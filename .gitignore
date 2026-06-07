@@ -1,11 +1,18 @@
 # Large data / generated files
-fastq/
-ref/
-results/
+fastq/*
+ref/*
+results/*
 .micromamba/
 bin/micromamba
 pipeline.out
 *.log
+
+# Keep empty directory structure
+!fastq/.gitkeep
+!ref/.gitkeep
+!results/.gitkeep
+!results/logs/
+!results/logs/.gitkeep
 
 # macOS
 .DS_Store
