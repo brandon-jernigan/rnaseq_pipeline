@@ -1,0 +1,15 @@
+# Large data / generated files
+fastq/
+ref/
+results/
+.micromamba/
+bin/micromamba
+pipeline.out
+*.log
+
+# macOS
+.DS_Store
+
+# editor/system
+.vscode/
+.idea/
