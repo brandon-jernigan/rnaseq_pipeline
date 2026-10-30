@@ -48,6 +48,7 @@ fi
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_ROOT"
+source "$PROJECT_ROOT/scripts/lib/common.sh"
 
 ENV_NAME="${ENV_NAME:-rnaseq}"
 MAMBA_ROOT="${MAMBA_ROOT:-$PROJECT_ROOT/.micromamba}"
@@ -94,7 +95,8 @@ if command -v apt-get >/dev/null 2>&1; then
     grep \
     findutils \
     procps \
-    parallel
+    parallel \
+    util-linux
 
 else
   echo "[WARN] apt-get not found. Skipping system package installation."
@@ -167,28 +169,7 @@ echo "  samtools:      $(command -v samtools)"
 echo "  featureCounts: $(command -v featureCounts)"
 echo
 
-echo "[VERIFY] Versions:"
-echo
-
-echo "FastQC:"
-fastqc --version || true
-echo
-
-echo "Trimmomatic:"
-trimmomatic -version || true
-echo
-
-echo "HISAT2:"
-hisat2 --version | head -n 2 || true
-echo
-
-echo "samtools:"
-samtools --version | head -n 2 || true
-echo
-
-echo "featureCounts:"
-featureCounts -v || true
-echo
+verify_versions
 
 ###############################################################################
 # Adapter file check

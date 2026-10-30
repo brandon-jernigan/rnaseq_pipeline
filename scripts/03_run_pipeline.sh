@@ -94,6 +94,9 @@ fi
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_ROOT"
+source "$PROJECT_ROOT/scripts/lib/common.sh"
+source "$PROJECT_ROOT/scripts/lib/references.sh"
+source "$PROJECT_ROOT/scripts/lib/inputs.sh"
 
 ENV_NAME="${ENV_NAME:-rnaseq}"
 MAMBA_ROOT="${MAMBA_ROOT:-$PROJECT_ROOT/.micromamba}"
@@ -116,188 +119,25 @@ ALIGN_DIR="$OUT_DIR/align"
 COUNT_DIR="$OUT_DIR/counts"
 LOG_DIR="$OUT_DIR/logs"
 
-mkdir -p \
-  "$QC_RAW_DIR" \
-  "$TRIM_DIR" \
-  "$QC_TRIM_DIR" \
-  "$ALIGN_DIR" \
-  "$COUNT_DIR" \
-  "$LOG_DIR"
+[[ "$#" -eq 0 || ( "$#" -eq 1 && "$1" == --preflight ) ]] || die "Usage: bash scripts/03_run_pipeline.sh [--preflight]"
+[[ "$THREADS" =~ ^[1-9][0-9]*$ ]] || die "THREADS must be a positive integer"
+activate_pipeline_env
+verify_versions
+ADAPTERS="$CONDA_PREFIX/share/trimmomatic/adapters/TruSeq3-PE.fa"
+[[ -s "$ADAPTERS" ]] || die "Trimmomatic adapter file missing: $ADAPTERS"
+lock_directory "$OUT_DIR"
+preflight_inputs
+if [[ "${1:-}" == --preflight ]]; then exit 0; fi
+verify_gtf
+verify_index "$INDEX_PREFIX"
 
+mkdir -p "$QC_RAW_DIR" "$TRIM_DIR" "$QC_TRIM_DIR" "$ALIGN_DIR" "$COUNT_DIR" "$LOG_DIR"
 LOG_FILE="$LOG_DIR/03_run_pipeline.log"
 exec > >(tee -a "$LOG_FILE") 2>&1
-
 echo "[03_run_pipeline] START"
-echo "[03_run_pipeline] PROJECT_ROOT=$PROJECT_ROOT"
-echo "[03_run_pipeline] ENV_NAME=$ENV_NAME"
-echo "[03_run_pipeline] MAMBA_ROOT=$MAMBA_ROOT"
-echo "[03_run_pipeline] THREADS=$THREADS"
-echo "[03_run_pipeline] FASTQ_DIR=$FASTQ_DIR"
-echo "[03_run_pipeline] REF_DIR=$REF_DIR"
-echo "[03_run_pipeline] GTF=$GTF"
-echo "[03_run_pipeline] INDEX_PREFIX=$INDEX_PREFIX"
-echo "[03_run_pipeline] OUT_DIR=$OUT_DIR"
-echo "[03_run_pipeline] LOG_FILE=$LOG_FILE"
-echo
-
-###############################################################################
-# Activate micromamba environment
-###############################################################################
-
-if [[ ! -x "$MAMBA_BIN" ]]; then
-  echo "[ERROR] micromamba not found at: $MAMBA_BIN"
-  echo "[ERROR] Run scripts/00_install_tools.sh first."
-  exit 1
-fi
-
-if [[ ! -d "$MAMBA_ROOT/envs/$ENV_NAME" ]]; then
-  echo "[ERROR] Micromamba environment not found: $MAMBA_ROOT/envs/$ENV_NAME"
-  echo "[ERROR] Run scripts/00_install_tools.sh first."
-  exit 1
-fi
-
-export MAMBA_ROOT_PREFIX="$MAMBA_ROOT"
-eval "$("$MAMBA_BIN" shell hook -s bash)"
-micromamba activate "$ENV_NAME"
-
-echo "[03_run_pipeline] CONDA_PREFIX=$CONDA_PREFIX"
-echo
-
-###############################################################################
-# Required tools
-###############################################################################
-
-for tool in fastqc trimmomatic hisat2 samtools featureCounts; do
-  if ! command -v "$tool" >/dev/null 2>&1; then
-    echo "[ERROR] Required tool not found in PATH: $tool"
-    exit 1
-  fi
-done
-
-ADAPTERS="$CONDA_PREFIX/share/trimmomatic/adapters/TruSeq3-PE.fa"
-
-if [[ ! -s "$ADAPTERS" ]]; then
-  echo "[ERROR] Trimmomatic adapter file missing:"
-  echo "  $ADAPTERS"
-  exit 1
-fi
-
-echo "[03_run_pipeline] ADAPTERS=$ADAPTERS"
-echo
-
-###############################################################################
-# Validate references and index
-###############################################################################
-
-if [[ ! -s "$GTF" ]]; then
-  echo "[ERROR] GTF file missing or empty:"
-  echo "  $GTF"
-  echo "[ERROR] Run scripts/01_download_reference.sh first."
-  exit 1
-fi
-
-for i in 1 2 3 4 5 6 7 8; do
-  if [[ ! -s "${INDEX_PREFIX}.${i}.ht2" ]]; then
-    echo "[ERROR] HISAT2 index is missing or incomplete:"
-    echo "  ${INDEX_PREFIX}.${i}.ht2"
-    echo "[ERROR] Run scripts/02_build_hisat2_index.sh first."
-    exit 1
-  fi
-done
-
-if [[ ! -d "$FASTQ_DIR" ]]; then
-  echo "[ERROR] FASTQ_DIR does not exist:"
-  echo "  $FASTQ_DIR"
-  exit 1
-fi
-
-###############################################################################
-# FASTQ pairing helpers
-###############################################################################
-
-guess_r2() {
-  local r1="$1"
-  local r2=""
-
-  if [[ "$r1" == *"_R1.fastq.gz" ]]; then
-    r2="${r1/_R1.fastq.gz/_R2.fastq.gz}"
-  elif [[ "$r1" == *"_R1.fq.gz" ]]; then
-    r2="${r1/_R1.fq.gz/_R2.fq.gz}"
-  elif [[ "$r1" == *"_r1.fastq.gz" ]]; then
-    r2="${r1/_r1.fastq.gz/_r2.fastq.gz}"
-  elif [[ "$r1" == *"_r1.fq.gz" ]]; then
-    r2="${r1/_r1.fq.gz/_r2.fq.gz}"
-  elif [[ "$r1" == *"_1.fastq.gz" ]]; then
-    r2="${r1/_1.fastq.gz/_2.fastq.gz}"
-  elif [[ "$r1" == *"_1.fq.gz" ]]; then
-    r2="${r1/_1.fq.gz/_2.fq.gz}"
-  else
-    echo ""
-    return 1
-  fi
-
-  echo "$r2"
-}
-
-sample_name_from_r1() {
-  local r1="$1"
-  local base
-  base="$(basename "$r1")"
-
-  base="${base%_R1.fastq.gz}"
-  base="${base%_R1.fq.gz}"
-  base="${base%_r1.fastq.gz}"
-  base="${base%_r1.fq.gz}"
-  base="${base%_1.fastq.gz}"
-  base="${base%_1.fq.gz}"
-
-  echo "$base"
-}
-
-###############################################################################
-# Discover FASTQ files
-###############################################################################
-
-echo "[03_run_pipeline] Scanning FASTQ directory:"
-echo "  $FASTQ_DIR"
-echo
-
-mapfile -t R1_FILES < <(
-  find "$FASTQ_DIR" -maxdepth 1 -type f \
-    \( \
-      -name "*_R1.fastq.gz" -o \
-      -name "*_R1.fq.gz" -o \
-      -name "*_r1.fastq.gz" -o \
-      -name "*_r1.fq.gz" -o \
-      -name "*_1.fastq.gz" -o \
-      -name "*_1.fq.gz" \
-    \) | sort
-)
-
-if [[ "${#R1_FILES[@]}" -eq 0 ]]; then
-  echo "[ERROR] No R1 FASTQ files found in:"
-  echo "  $FASTQ_DIR"
-  exit 1
-fi
-
-echo "[03_run_pipeline] Detected ${#R1_FILES[@]} R1 FASTQ file(s)"
-echo
-
-RAW_FASTQS=()
-
-for r1 in "${R1_FILES[@]}"; do
-  r2="$(guess_r2 "$r1")"
-
-  if [[ -z "$r2" || ! -s "$r2" ]]; then
-    echo "[ERROR] Missing R2 FASTQ for:"
-    echo "  $r1"
-    echo "[ERROR] Expected:"
-    echo "  $r2"
-    exit 1
-  fi
-
-  RAW_FASTQS+=("$r1" "$r2")
-done
+echo "[03_run_pipeline] FASTQ_DIR=$FASTQ_DIR OUT_DIR=$OUT_DIR THREADS=$THREADS"
+echo "[03_run_pipeline] INDEX_PREFIX=$INDEX_PREFIX GTF=$GTF ADAPTERS=$ADAPTERS"
+verify_versions
 
 ###############################################################################
 # Raw FastQC
