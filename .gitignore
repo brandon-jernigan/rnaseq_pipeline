@@ -20,3 +20,8 @@ pipeline.out
 # editor/system
 .vscode/
 .idea/
+
+
+# Local Python test bytecode
+__pycache__/
+*.pyc
